@@ -3,6 +3,7 @@ import { ApiError } from "../utils/api-error.js";
 import { User } from "../models/user.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/api-response.js";
+import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshToken = async(userId) => {
     try {
@@ -21,7 +22,7 @@ const generateAccessAndRefreshToken = async(userId) => {
     }
 }
 
-export const registerUser = asyncHandler (async(req, res, next)=>{
+export const registerUser = asyncHandler (async(req, res)=>{
     const { fullname, username, email, password } = req.body;
     
     if (!fullname || !username || !email || !password) {
@@ -84,19 +85,16 @@ export const registerUser = asyncHandler (async(req, res, next)=>{
 
 });
 
-export const loginUser = asyncHandler(async(req, res, next)=>{
+export const loginUser = asyncHandler(async(req, res)=>{
 
-    const { username, email, password } = req.json();
+    const { email, password } = req.body;
 
-    if (!username || !email) {
-        throw new ApiError(400, "Fields re required");
+    if (!email) {
+        throw new ApiError(400, "Email is required");
     }
 
     const user = await User.findOne({
-        $or : [
-            username,
-            email
-        ]
+        email
     });
 
     if (!user) {
@@ -137,3 +135,67 @@ export const loginUser = asyncHandler(async(req, res, next)=>{
 
 });
 
+export const logoutUser = asyncHandler ( async(req, res, next) => {
+    await User.findByIdAndUpdate(
+        req.user._id,
+        {
+            $set : {
+                refreshToken : undefined
+            }
+        },
+        {
+            new : true
+        }
+    );
+
+    const options  = {
+        httpOnly : true,
+        secure : true
+    }
+
+    return res
+    .status(200)
+    .clearCookie("refreshToken", options)
+    .clearCookie("accessToken", options)
+    .json(new ApiResponse(200, {}, "User logged out successfullly"));
+});
+
+export const refershAccessToken = asyncHandler( async(req, res)=>{
+
+    const incomingRefreshToken = req.cookie.refreshToken;
+    if (!incomingRefreshToken) {
+        throw new ApiError(401, "Unauthorized request");
+    }
+
+    const decodedToken = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
+
+    const user = await User.findById(decodedToken._id);
+
+    if (!user) {
+        throw new ApiError(401, "Invalid refersh token")
+    }
+
+    if ( incomingRefreshToken !==  user?.refreshToken ) {
+        throw new ApiError(401, "Refresh token is expired" );
+    }
+
+    const options  = {
+        httpOnly : true,
+        secure : true
+    }
+
+    const { refreshToken, accessToken } = await generateAccessAndRefreshToken(user._id);
+
+    return res
+    .status(200)
+    .cookie("accessToken", accessToken)
+    .cookie("refreshToken", refreshToken)
+    .json(
+        new ApiResponse(
+            200,
+            {refreshToken, accessToken},
+            "Access Token Refreshed"
+            )
+    );
+
+} )
